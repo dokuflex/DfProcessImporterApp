@@ -185,6 +185,8 @@ namespace DfProcessImporterApp
             
 
             var xmlPath = config.sourceOptions?.FirstOrDefault(p => p.Key == "xmlPath").Value;
+            var complexNodes = config.sourceOptions?.FirstOrDefault(p => p.Key == "complexNodes").Value?.Split(',');
+
             if (string.IsNullOrWhiteSpace(xmlPath))
             {
                 Logger.ErrorFormat("XML params from config is invalid.");
@@ -246,14 +248,16 @@ namespace DfProcessImporterApp
 
                                         if (level2Element.Elements().Count() > 0)
                                         {
-                                            if (level1Element.Elements().Where(q => q.Name.ToString() == level2Element.Name.ToString()).Count() > 1)
+                                            if (complexNodes.Contains(dataInfoField.fieldname) || level1Element.Elements().Where(q => q.Name.ToString() == level2Element.Name.ToString()).Count() > 1)
                                                 dataInfoField.type = "List";
+
+
 
                                             dataInfoField.value = SerializeChilds(level2Element);
                                         }
                                         else
                                         {
-                                            if (level1Element.Elements().Where(q => q.Name.ToString() == level2Element.Name.ToString()).Count() > 1)
+                                            if (complexNodes.Contains(dataInfoField.fieldname) || level1Element.Elements().Where(q => q.Name.ToString() == level2Element.Name.ToString()).Count() > 1)
                                                 dataInfoField.type = "List";
                                             dataInfoField.value = level2Element.Value.ToString();
                                         }
@@ -270,19 +274,6 @@ namespace DfProcessImporterApp
                                         if (await StartProcess(dataInfoItem, processId, communityId, config.initWF, config.superAdmin, dataId))
                                         {
                                             historyStorage.InsertItem(dataId, 0, 1);
-
-                                            try
-                                            {
-                                                if (!Directory.Exists(file.DirectoryName + "\\procesados"))
-                                                    Directory.CreateDirectory(file.DirectoryName + "\\procesados");
-
-                                                file.MoveTo(file.DirectoryName + "\\procesados");
-                                            }
-                                            catch (Exception e)
-                                            {
-                                                Logger.ErrorFormat("Ocurrió un error al marcar como procesado el archivo {0}. Descripción del error: {1}", file.Name, e.Message);
-                                            }
-
                                         }
                                         else
                                         {
@@ -352,6 +343,7 @@ namespace DfProcessImporterApp
                     if (parentChild.Elements().Where(q => q.Name.ToString() == child.Name.ToString()).Count() > 1)
                         dataInfoField.type = "List";
                     dataInfoField.value = child.Value;
+                    
                 }
                 dataInfoFields.Add(dataInfoField);
             }
@@ -647,8 +639,7 @@ namespace DfProcessImporterApp
 
         private string CustomJsoSerialice(DataInfo dataInfo)
         {
-            var ObjList = new Dictionary<String, List<String>>();
-
+            var array = new JArray();
             var obj = new JObject();
 
             foreach (var processData in dataInfo.dataInfoFields)
@@ -670,17 +661,9 @@ namespace DfProcessImporterApp
                         break;
 
                     case "List":
-                        
-                        if (ObjList.Any(q => q.Key == processData.fieldname))
-                        {
-                            ObjList[processData.fieldname].Add(processData.value?.ToString());
-                        }
-                        else
-                        {
-                            ObjList.Add(processData.fieldname, new List<string> { processData.value?.ToString() });
-                        }
-                        obj[processData.fieldname] = JsonConvert.SerializeObject(ObjList[processData.fieldname]);
-                        
+                        array.Add(JObject.Parse(processData.value?.ToString()));
+                        obj[processData.fieldname] = array;
+
                         break;
 
                     default:
