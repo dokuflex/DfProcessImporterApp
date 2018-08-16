@@ -142,6 +142,10 @@ namespace DfProcessImporterApp
                 {
                     XMLProcess().Wait();
                 }
+                else if (sourceType == "Ficheros JSON")
+                {
+                    JSONProcess().Wait();
+                }
                 else
                 {
                     Logger.ErrorFormat("Invalid SourceType.");
@@ -160,6 +164,114 @@ namespace DfProcessImporterApp
             }
 
             
+        }
+
+        private async Task<bool> JSONProcess()
+        {
+            if (string.IsNullOrEmpty(ApiTicket))
+            {
+                Logger.ErrorFormat("Missing ApiTicket.");
+                return false;
+            }
+
+            var jsonPath = config.sourceOptions?.FirstOrDefault(p => p.Key == "jsonPath").Value;
+            
+
+            if (string.IsNullOrWhiteSpace(jsonPath))
+            {
+                Logger.ErrorFormat("JSON params from config is invalid.");
+                return false;
+            }
+
+            if (!Directory.Exists(jsonPath))
+            {
+                Logger.ErrorFormat("Failed open directory in: {0}", jsonPath);
+            }
+            else
+            {
+                Logger.Info("Starting proccess json");
+
+                DirectoryInfo di = new DirectoryInfo(jsonPath);
+                FileInfo[] files = di.GetFiles("*.json");
+
+                if (files.Count() == 0)
+                {
+                    Logger.InfoFormat("No json files found!!!");
+                    return false;
+                }
+
+                foreach (var file in files)
+                {
+                    Stream jsonStream = file.OpenRead();
+
+                    var dataId = Path.GetFileNameWithoutExtension(file.FullName);
+                    bool processed = false;
+                    using (jsonStream)
+                    {
+                        if (jsonStream != null)
+                        {
+                            Logger.InfoFormat("{0} xml file loaded", file.Name.ToString());
+
+                            StreamReader reader = new StreamReader(jsonStream);
+                            string jsonData = reader.ReadToEnd();
+                            //JObject json = JObject.Parse(jsonData);
+                            //jsonData = JsonConvert.SerializeObject(json);
+
+
+                            if (!historyStorage.Exits(dataId))
+                            {
+                                if (await StartProcessJson(jsonData, processId, communityId, config.initWF, config.superAdmin, dataId))
+                                {
+                                    historyStorage.InsertItem(dataId, 0, 1);
+                                    processed = true;
+                                }
+                                else
+                                {
+                                    historyStorage.InsertItem(dataId, 1, 0);
+                                }
+                            }
+                            else
+                            {
+                                var faildAttems = historyStorage.IsFailed(dataId);
+
+                                if (faildAttems > 0 && faildAttems <= maxAttemps)
+                                {
+                                    // retry and updateElement
+                                    if (await StartProcessJson(jsonData, processId, communityId, config.initWF, config.superAdmin, dataId))
+                                    {
+                                        historyStorage.UpdateItem(dataId, faildAttems, 1);
+                                        processed = true;
+                                    }
+                                    else
+                                    {
+                                        historyStorage.UpdateItem(dataId, faildAttems + 1, 0);
+                                    }
+                                }
+                            }
+
+                            Logger.InfoFormat("{0} xml file process complete.", file.Name.ToString());
+                        }
+                    }
+
+                    if (processed)
+                    {
+                        try
+                        {
+                            if (!Directory.Exists(file.DirectoryName + "\\procesados"))
+                                Directory.CreateDirectory(file.DirectoryName + "\\procesados");
+
+                            file.MoveTo(file.DirectoryName + "\\procesados\\" + file.Name);
+                        }
+                        catch (Exception e)
+                        {
+                            Logger.ErrorFormat("Ocurrió un error al marcar como procesado el archivo {0}. Descripción del error: {1}", file.Name, e.Message);
+                        }
+                    }
+                }
+            }
+
+            return true;
+
         }
 
         private string GetCommunityId(string communityName)
@@ -209,14 +321,13 @@ namespace DfProcessImporterApp
                     Logger.InfoFormat("No xml files found!!!");
                     return false;
                 }
-                               
-
+                      
                 foreach (var file in files)
                 {
                     Stream xmlStream = file.OpenRead();
                     
                     var dataId = Path.GetFileNameWithoutExtension(file.FullName);
-
+                    bool processed = false;
                     using (xmlStream)
                     {
                         if (xmlStream != null)
@@ -250,9 +361,6 @@ namespace DfProcessImporterApp
                                         {
                                             if (complexNodes.Contains(dataInfoField.fieldname) || level1Element.Elements().Where(q => q.Name.ToString() == level2Element.Name.ToString()).Count() > 1)
                                                 dataInfoField.type = "List";
-
-
-
                                             dataInfoField.value = SerializeChilds(level2Element);
                                         }
                                         else
@@ -267,13 +375,12 @@ namespace DfProcessImporterApp
                                     DataInfo dataInfoItem = new DataInfo();
                                     dataInfoItem.dataInfoFields = dataInfoFields;
                                    
-                                    
-
                                     if (!historyStorage.Exits(dataId))
                                     {
                                         if (await StartProcess(dataInfoItem, processId, communityId, config.initWF, config.superAdmin, dataId))
                                         {
                                             historyStorage.InsertItem(dataId, 0, 1);
+                                            processed = true;
                                         }
                                         else
                                         {
@@ -290,18 +397,7 @@ namespace DfProcessImporterApp
                                             if (await StartProcess(dataInfoItem, processId, communityId, config.initWF, config.superAdmin, dataId))
                                             {
                                                 historyStorage.UpdateItem(dataId, faildAttems, 1);
-
-                                                try
-                                                {
-                                                    if (!Directory.Exists(file.DirectoryName + "\\procesados"))
-                                                        Directory.CreateDirectory(file.DirectoryName + "\\procesados");
-
-                                                    file.MoveTo(file.DirectoryName + "\\procesados");
-                                                }
-                                                catch (Exception e)
-                                                {
-                                                    Logger.ErrorFormat("Ocurrió un error al marcar como procesado el archivo {0}. Descripción del error: {1}", file.Name, e.Message);
-                                                }
+                                                processed = true;
                                             }
                                             else
                                             {
@@ -314,6 +410,21 @@ namespace DfProcessImporterApp
                             }
 
                             Logger.InfoFormat("{0} xml file process complete.", file.Name.ToString());
+                        }
+                    }
+
+                    if (processed)
+                    {
+                        try
+                        {
+                            if (!Directory.Exists(file.DirectoryName + "\\procesados"))
+                                Directory.CreateDirectory(file.DirectoryName + "\\procesados");
+
+                            file.MoveTo(file.DirectoryName + "\\procesados\\" + file.Name);
+                        }
+                        catch (Exception e)
+                        {
+                            Logger.ErrorFormat("Ocurrió un error al marcar como procesado el archivo {0}. Descripción del error: {1}", file.Name, e.Message);
                         }
                     }
                 }
@@ -716,6 +827,55 @@ namespace DfProcessImporterApp
                 else
                 {
                     Logger.ErrorFormat("Error during starting process with dataId: {0} Error description: {1}", dataId , processResponse.res);
+                    return false;
+                }
+            }
+            else
+            {
+                Logger.ErrorFormat("Fail start process");
+                return false;
+            }
+
+            return true;
+        }
+
+        public async Task<bool> StartProcessJson(string jsonData, string processId, string communityId, bool initWF, bool superAdmin, string dataId = "")
+        {
+            if (!String.IsNullOrEmpty(dataId))
+            {
+                Logger.InfoFormat("Starting process with dataId: {0}", dataId);
+            }
+            else
+            {
+                Logger.InfoFormat("Starting process without dataId");
+            }
+
+            var values = new[] {
+                            new KeyValuePair<string,string>("ticket",ApiTicket),
+                            new KeyValuePair<string,string>("processId",processId),
+                            new KeyValuePair<string,string>("communityId",communityId),
+                            new KeyValuePair<string,string>("data",jsonData),
+                            new KeyValuePair<string,string>("dataId",dataId),
+                            new KeyValuePair<string,string>("initWF",initWF.ToString())
+            };
+
+            var content = new FormUrlEncodedContent(values);
+
+            var result = await client.PostAsync("/services/rest/process/updateData", content);
+
+            var resultStr = await result.Content.ReadAsStringAsync();
+
+            if (!String.IsNullOrWhiteSpace(resultStr))
+            {
+                var processResponse = JsonConvert.DeserializeObject<ProcessResponse>(resultStr);
+
+                if (processResponse.res == "ok")
+                {
+                    Logger.InfoFormat("Process success with id: " + processResponse.id);
+                }
+                else
+                {
+                    Logger.ErrorFormat("Error during starting process with dataId: {0} Error description: {1}", dataId, processResponse.res);
                     return false;
                 }
             }
